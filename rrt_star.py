@@ -41,14 +41,109 @@ class RrtStar:
         self.time_start = -1
         self.time_end = -1
         self.dist = -1
-
+        
+    def generate_random_node(self, goal_sample_rate):
+        delta = self.utils.delta # 0.5
+        
+        if np.random.random() > goal_sample_rate:
+            return Node((np.random.uniform(self.x_range[0] + delta, self.x_range[1] - delta),
+                         np.random.uniform(self.y_range[0] + delta, self.y_range[1] - delta)))
+            
+        return self.ed_point
+    
+    def nearest_neighbor(self, node_list, n):
+        return node_list[int(np.argmin([math.hypot(nd.x - n.x, nd.y - n.y)
+                                        for nd in node_list]))]
+    
+    def new_state(self, node_start, node_goal):
+        dist, theta = self.get_distance_and_angle(node_start, node_goal)
+        
+        dist = min(self.step_length, dist)
+        node_new = Node((node_start.x + dist * math.cos(theta),
+                         node_start.y + dist * math.sin(theta)))
+        node_new.parent = node_start
+        
+        return node_new
+    
+    def get_distance_and_angle(self, node_start, node_end):
+        dx = node_end.x - node_start.x
+        dy = node_end.y - node_start.y
+        return math.hypot(dx,dy), math.atan2(dy, dx)
+    
+    def find_near_neighbor(self, node_new):
+        n = len(self.nodes) + 1
+        r = min(self.search_radius * math.sqrt((math.log(n) / n)), self.step_length)
+        dist_table = [math.hypot(nd.x - node_new.x, nd.y - node_new.y) for nd in self.nodes]
+        dist_table_index = [ind for ind in range(len(dist_table)) if dist_table[ind] <= r and
+                             not self.utils.is_collision(node_new, self.nodes[ind])]
+        
+        return dist_table_index
+    
+    def cost(self,node_p):
+        node = node_p
+        cost = 0.0
+        while node.parent:
+            cost += math.hypot(node.x - node.parent.x, node.y - node.parent.y)
+            node = node.parent
+        
+        return cost
+    
+    def choose_parent(self, node_new, neighbor_index):
+        cost = [self.get_new_cost(self.nodes[i], node_new) for i in neighbor_index]
+        cost_min_index = neighbor_index[int(np.argmin(cost))]
+        node_new.parent = self.nodes[cost_min_index]
+        
+    def get_new_cost(self, node_start, node_end):
+        dist, _ = self.get_distance_and_angle(node_start, node_end)
+        
+        return self.cost(node_start)  + dist
+     
+    def rewire(self, node_new, neighbor_index):
+        for i in neighbor_index:
+            node_neighbor = self.nodes[i]
+            if self.cost(node_neighbor) > self.get_new_cost(node_new,node_neighbor):
+                node_neighbor.parent = node_new
+                
+    def search_goal_parent(self):
+        dist_list = [math.hypot(n.x - self.ed_point.x, n.y - self.ed_point.y) for n in self.nodes]
+        node_index = [i for i in range(len(dist_list)) if dist_list[i]<= self.step_length]
+        
+        if len(node_index) > 0:
+            cost_list = [dist_list[i] + self.cost(self.nodes[i]) for i in node_index
+                         if not self.utils.is_collision(self.nodes[i], self.ed_point)]
+            return node_index[int(np.argmin(cost_list))]
+        return len(self.vertex) - 1
+    
     def planning(self):
         path = None
         self.time_start = time.time()
         converge = False
         for i in tqdm.tqdm(range(self.max_iter)):
             # TODO: Implement RRT Star planning (Free to add your own functions)
-            pass
+            # 在一定概率选目标点的同时随机采点
+            node_rand = self.generate_random_node(self.sample_rate)
+            node_near = self.nearest_neighbor(self.nodes, node_rand)
+            node_new = self.new_state(node_near, node_rand)
+            
+            if i % 500 == 0:
+                print(i)
+                
+            if node_new and not self.utils.is_collision(node_near, node_new):
+                neighbor_index = self.find_near_neighbor(node_new)
+                self.nodes.append(node_new)
+
+                if neighbor_index:
+                    self.choose_parent(node_new, neighbor_index)
+                    self.rewire(node_new, neighbor_index)
+                    
+        index = self.search_goal_parent()
+        
+        self.path = self.extract_path(self.nodes[index])
+        
+        # self.plotting.animation(self.nodes, self.path, "rrt*, N = " + str(self.max_iter)) 
+                 
+        return self.path
+                 
 
         self.time_end = time.time()
         self.iter_num = i + 1
@@ -91,7 +186,7 @@ def env1_planning(eval_time=1):
 
     # visualization
     if eval_time == 1:
-        rrt = RrtStar(x_start, x_goal, 0.5, 0.05, 0.1, 10000, env.EnvOne())
+        rrt = RrtStar(x_start, x_goal, 1, 0.05, 0.1, 10000, env.EnvOne())
         path = rrt.planning()
         if not path:
             print("No Path Found!")
